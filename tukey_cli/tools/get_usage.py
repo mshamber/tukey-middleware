@@ -37,8 +37,8 @@ def time_to_unix(time_str):
 def query_usage(query):
 
     conn_template = "dbname='%s' user='%s' host='%s' password='%s'"
-    db_name = 'dashboard'
-    db_username = 'console_ro'
+    db_name = local_settings.USAGE_DB_NAME
+    db_username = local_settings.USAGE_DB_USERNAME
     db_password =  local_settings.USAGE_DB_PASSWORD
     host = local_settings.USAGE_DB_HOST
 
@@ -109,21 +109,9 @@ def main():
 
     total_hours = (_stop_unix - _start_unix) / (60.* 60)
 
-    resources = {
-	'cloud': {
-	    'adler': 'OSDC Cloud2',
-	    'sullivan': 'OSDC-Sullivan'
-	},
-	'hadoop': {
-	name.replace('-','_').lower(): name for name in [
-	    'OCC-Y', 'OCC-LVOC-HADOOP']
-	}
-    }
+    resources = local_settings.USAGE_RESOURCES
 
-    attributes = {
-	'hadoop': ['jobs', 'hdfsdu'],
-	'cloud': ['du', 'cores', 'ram']
-    }
+    attributes = local_settings.USAGE_ATTRIBUTES
 
     usages = []
 
