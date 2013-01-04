@@ -58,7 +58,6 @@ class Transformer(object):
         
         transformed = self.transform_templates(json_string, path)
 
-	#print "TRANSFORMED", transformed
         
         try:
             j_object[name] = self.loads(transformed)
@@ -160,15 +159,12 @@ class Transformer(object):
         '''
         
         j_list = self.loads(json_string)
-	#print "JLIST IN", json_string
-	#print "J_LIST OBJ", j_list
         new_list = []
         
         for j_obj in j_list:
 	    
             j_string = json.dumps(j_obj)
             new_json = self.transform(j_string, name, path)
-	    #print "NEW_JSON", new_json
             new_list.append(self.loads(new_json))
             
         return json.dumps(new_list)
@@ -185,7 +181,7 @@ class Transformer(object):
     
         return json.dumps(j_objs)
     
-    def add_attr(self, json_string, attr, value):
+    def add_attr_single(self, json_string, attr, value):
         '''
             json_string is json object.  Returns the
             attr with value as a json string
@@ -196,6 +192,14 @@ class Transformer(object):
         
         return json.dumps(j_obj)
         
+    def add_attr(self, json_string, attr, value):
+        '''
+            check if is singular or list then add the attribute
+            to each element or the object
+        '''
+        if json_string.strip()[0] == '[':
+            return self.add_attr_list(json_string, attr, value)
+        return self.add_attr_single(json_string, attr, value)
     
     def strip(self, json_string, value):
         '''
