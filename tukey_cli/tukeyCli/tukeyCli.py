@@ -318,6 +318,7 @@ class TukeyCli(object):
         for (site, cmd) in commands.items():
             try:
                 result = ''
+                stderr = ''
                 
                 config = self.configs[site]
                 sections = config.sections()
@@ -329,6 +330,10 @@ class TukeyCli(object):
                     p = Popen(cmd, shell=True, executable='/bin/bash', stdout=PIPE, stderr=PIPE)
             
                     raw_output, stderr = p.communicate()
+
+                    if raw_output == TukeyCli.__PROXY_COMMAND:
+                        host = config.get(TukeyCli.__PROXY_SECTION, 'host')
+                        raw_output = proxy_method(host)
                 
                 result = self.strip(raw_output, site, command_name)
 

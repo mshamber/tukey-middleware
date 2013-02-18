@@ -89,19 +89,23 @@ class OpenStackApiProxy(object):
                 if not name in post_exception_names:
                     name = name[:-1]
                 
-                body_values = json.loads(req.body)[name]
-                split_id = body_values['name'].split('-',1)
-                cloud = split_id[0]
-                new_object_name = split_id[-1]
-                body_values['name'] = new_object_name
-
-                #self.logger.debug(body_values)
-                
-                req.body = json.dumps({name: body_values})
-                
-                global_values[TukeyCli.GLOBAL_SECTION].update(body_values)
-                
-                cli.load_config_dir(conf_dir + cloud)
+                body_values = json.loads(req.body)
+                if name in body_values:
+                    body_values = json.loads(req.body)[name]
+                    split_id = body_values['name'].split('-',1)
+                    cloud = split_id[0]
+                    new_object_name = split_id[-1]
+                    body_values['name'] = new_object_name
+    
+                    #self.logger.debug(body_values)
+                    
+                    req.body = json.dumps({name: body_values})
+                    
+                    global_values[TukeyCli.GLOBAL_SECTION].update(body_values)
+                    
+                    cli.load_config_dir(conf_dir + cloud)
+                else:
+                    cli.load_config_dir(conf_dir)
 
             elif req.method == "DELETE" and name in multiplexed_names:
                 id = global_values[TukeyCli.GLOBAL_SECTION]['id']
@@ -125,11 +129,14 @@ class OpenStackApiProxy(object):
             if len(req.query_string) > 0:
                 path = "%s?%s" % (path, req.query_string)
 
-            #self.logger.debug("The command is %s", command)
+            self.logger.debug("The command is %s", command)
+            self.logger.debug(global_values)
+
+            return_headers = {"headers": []}            
 
             result = cli.execute_commands(command, values, object_name=name,
                 single=is_single, 
-                proxy_method=self.openstack_proxy(req, path))
+                proxy_method=self.openstack_proxy(req, path, return_headers))
 
             logger.debug(result)
 
@@ -154,6 +161,9 @@ class OpenStackApiProxy(object):
 
             resp.headers.add('Content-Type','application/json')
 
+            if req.method == "HEAD":
+                for header, value in return_headers["headers"]:
+                    resp.headers.add(header, value)
 
         except exc.HTTPException, e:
             resp = e
@@ -250,10 +260,10 @@ class OpenStackApiProxy(object):
             return command_segments[0][:-1], True
 
     
-    def openstack_proxy(self, req, path):
-        return lambda host: str(self.proxy_request(host, req, path))
+    def openstack_proxy(self, req, path, return_headers):
+        return lambda host: str(self.proxy_request(host, req, path, return_headers))
 
-    def proxy_request(self, host, req, path):
+    def proxy_request(self, host, req, path, return_headers):
         conn = httplib.HTTPConnection(host, self.port, False)
         if req.method != "POST" and 'Content-Length' in req.headers:
             del(req.headers['Content-Length'])
@@ -263,12 +273,16 @@ class OpenStackApiProxy(object):
             res_list = '[]'
         else:
             res_body = response.read()
-            res_obj = json.loads(str(res_body))
-            stripped_res = res_obj[res_obj.keys()[0]]
-            if type(stripped_res) is not list:
-                stripped_res = [stripped_res]
-            res_list = json.dumps(stripped_res)
+            try:
+                res_obj = json.loads(str(res_body))
+                stripped_res = res_obj[res_obj.keys()[0]]
+                if type(stripped_res) is not list:
+                    stripped_res = [stripped_res]
+                res_list = json.dumps(stripped_res)
+            except ValueError:
+                res_list = res_body
         conn.close()
+        return_headers["headers"] = response.getheaders()
         return res_list
 
 

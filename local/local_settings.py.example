@@ -53,11 +53,27 @@ USAGE_ATTRIBUTES = {
 }
 
 
+# used in auth_proxy to switch host to localhost for
+# endpoint request 
+PROXY_ENDPOINT_PORTS = [5000,8774,9292, 35357]
+
+# used in auth proxy to replace in values in the
+# forwarded response body
+# This kills the volume service with fire
+PROXY_REPLACE = {'volume': ''}
+
+
+AUTH_TOKEN_EXPIRATION = 24*60*60
+
+
 # Server running the default keystone if there is one
 KEYSTONE_HOST = '10.103.114.3'
 
 # The host API proxies will be running on
 API_HOST = '127.0.0.1'
+
+# The port of the nova api
+NOVA_PROXY_PORT = 8774
 
 # Required for Swift somehow this will be determined
 # at OpenStack cloud install time

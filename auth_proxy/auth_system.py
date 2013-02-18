@@ -28,7 +28,7 @@ class AuthSystem(object):
     '''
 
     def authenticate(self, method, identifier, tenant, cloud):
-        '''Authenticate a user with a federated method and ifentifier 
+        '''Authenticate a user with a federated method and ifentifier
         like OpenID email attribute or Shibboleth EPPN
 
 
@@ -43,18 +43,25 @@ class AuthSystem(object):
 
 
 class FakeId(object):
-    '''Mixin for non Keystone authentication methods to return the 
+    '''Mixin for non Keystone authentication methods to return the
     Keystone API for token, tenant and endpoint
     '''
 
-    def __init__(self, api_url, member_role_id, token_lifetime):
+    def __init__(self, api_url, member_role_id, token_lifetime,
+        glance_port=9292, nova_port=8774, ec2_port=8773,
+        identity_admin_port=35357, identity_port=5000):
 
         self.token_lifetime = token_lifetime
         self.url = api_url
         self.member_role_id = member_role_id
 
+        self.glance_port = glance_port
+        self.nova_port = nova_port
+        self.ec2_port = ec2_port
+        self.identity_admin_port = identity_admin_port
+        self.identity_port = identity_port
 
-    
+
     def _expiration(self):
         '''Returns times stamp of token_lifetime from now
         '''
@@ -104,64 +111,56 @@ class FakeId(object):
             }
 
 
+    class Endpoint(object):
 
-    def _format_service_catalog(self, url, tenant_id):
+        def __init__(self, admin_url, public_url, endpoint_type, name):
+            self.admin_url = admin_url
+            self.public_url = public_url
+            self.endpoint_type = endpoint_type
+            self.name = name
+
+
+    def _format_service_catalog(self, host, tenant_id):
         '''The Keystone API Service Catalog form.
         '''
+        proxy_info = locals()
+
+        endpoints = [
+            FakeId.Endpoint(
+                "".join(["http://%(host)s:", "%d" % self.glance_port , "/v1"]),
+                "".join(["http://%(host)s:", "%d" % self.glance_port , "/v1"]),
+                "image",
+                "Image Service"),
+            FakeId.Endpoint(
+                "".join(["http://%(host)s:", "%d" % self.nova_port, "/v1.1/%(tenant_id)s"]),
+                "".join(["http://%(host)s:", "%d" % self.nova_port, "/v1.1/%(tenant_id)s"]),
+                "compute",
+                "Compute Service"),
+            FakeId.Endpoint(
+                "".join(["http://%(host)s:", "%d" % self.ec2_port, "/services/Admin"]),
+                "".join(["http://%(host)s:", "%d" % self.ec2_port, "/services/Cloud"]),
+                "ec2",
+                "EC2 Service"),
+            FakeId.Endpoint(
+                "".join(["http://%(host)s:", "%d" % self.identity_admin_port, "/v2.0"]),
+                "".join(["http://%(host)s:", "%d" % self.identity_port, "/v2.0"]),
+                "identity",
+                "Identity Service")]
+
         return [
             {
                 "endpoints": [
                     {
-                        "adminURL": "http://%s:9292/v1" % url,
+                        "adminURL": endpoint.admin_url % proxy_info,
                         "region": "RegionOne",
-                        "publicURL": "http://%s:9292/v1" % url,
-                        "internalURL": "http://%s:9292/v1" % url
+                        "publicURL": endpoint.public_url % proxy_info,
+                        "internalURL": endpoint.public_url % proxy_info,
                     }
                 ],
                 "endpoints_links": [],
-                "type": "image",
-                "name": "Image Service"
-            },
-            {
-                "endpoints": [
-                    {
-                        "adminURL": "http://%s:8774/v1.1/%s" % (url, tenant_id),
-                        "region": "RegionOne",
-                        "publicURL": "http://%s:8774/v1.1/%s" % (url, tenant_id),
-                        "internalURL": "http://%s:8774/v1.1/%s" % (url, tenant_id)
-                    }
-                ],
-                "endpoints_links": [],
-                "type": "compute",
-                "name": "Compute Service"
-            },
-            {
-                "endpoints": [
-                    {
-                        "adminURL": "http://%s:8773/services/Admin" % url,
-                        "region": "RegionOne",
-                        "publicURL": "http://%s:8773/services/Cloud" % url,
-                        "internalURL": "http://%s:8773/services/Cloud" % url
-                    }
-                ],
-                "endpoints_links": [],
-                "type": "ec2",
-                "name": "EC2 Service"
-            },
-            {
-                "endpoints": [
-                    {
-                        "adminURL": "http://%s:35357/v2.0" % url,
-                        "region": "RegionOne",
-                        "publicURL": "http://%s:5000/v2.0" % url,
-                        "internalURL": "http://%s:5000/v2.0" % url
-                    }
-                ],
-                "endpoints_links": [],
-                "type": "identity",
-                "name": "Identity Service"
-            }
-        ]
+                "type": endpoint.endpoint_type,
+                "name": endpoint.name
+            } for endpoint in endpoints ]
 
 
     def _format_endpoint(self, token_id, tenant_id, user_id, tenant_name,
@@ -207,27 +206,27 @@ class FakeId(object):
     def fake_tenant(self):
         '''Returns a JSON serializable object that is equivalent to what
         Keystone will return when requesting tenant info.
-        '''    
+        '''
         pass
 
     def fake_endpoint(self):
         '''Returns a JSON serializable object that is equivalent to what
         Keystone will return when requesting endpoint info.
-        '''    
+        '''
         pass
 
 class OpenStackAuth(AuthSystem, FakeId):
-    '''Contacts database with OpenID or Shibboleth to get 
-    OpenStack credentials.    
+    '''Contacts database with OpenID or Shibboleth to get
+    OpenStack credentials.
     '''
 
-    def __init__(self, api_url, member_role_id, token_lifetime,
-        keystone_host, keystone_port):
+    def set_keystone_info(self, keystone_host, keystone_port):
+        ''' I really don't know what to do here: these are vital so I want to
+        put them in the constructor however i dont rewrite a bunch and lose the
+        niceity of the polymorphic constructor'''
 
         self.keystone_host = keystone_host
         self.keystone_port = keystone_port
-
-        super(OpenStackAuth, self).__init__(api_url, member_role_id, token_lifetime)
 
 
     def authenticate(self, method, identifier, tenant, cloud_name):
@@ -256,7 +255,7 @@ class OpenStackAuth(AuthSystem, FakeId):
             'Accept-Encoding': 'gzip, deflate'
             }
 
-        conn = httplib.HTTPConnection(self.keystone_host,self.keystone_port)
+        conn = httplib.HTTPConnection(self.keystone_host, self.keystone_port)
         conn.request("POST", "/v2.0/tokens", body, headers)
         res = conn.getresponse()
 
@@ -270,13 +269,13 @@ class OpenStackAuth(AuthSystem, FakeId):
         conn.close()
 
         access_obj = json.loads(access)
-        
+
         if "access" in access_obj and "serviceCatalog" in access_obj[
             "access"] and "tenant" in access_obj["access"]["token"]:
             tenant_id = access_obj["access"]["token"]["tenant"]["id"]
             access_obj["access"][
                 "serviceCatalog"] = self._format_service_catalog(
-                    "127.0.0.1", tenant_id)
+                    self.url, tenant_id)
 
         return access_obj
 
@@ -296,7 +295,7 @@ class EucalyptusAuth(AuthSystem, FakeId):
         self.user_id = fake_id
         self.expires = self._expiration()
 
-        return {"username": self.username}        
+        return {"username": self.username}
 
     def fake_token(self):
         return self._format_token(self.username, self.user_id,
