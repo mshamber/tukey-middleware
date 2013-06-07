@@ -28,136 +28,142 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../local')
 import local_settings
 
+GLOBAL = TukeyCli.GLOBAL_SECTION
 
 class OpenStackApiProxy(object):
     '''Proxy between OpenStack clients, in particular Horizon
-    and multiple clouds with multiple APIs''' 
-
+    and multiple clouds with multiple APIs'''
 
     def __init__(self, port, memcache_host, memcache_port, logger):
-
         self.port = port
-
         self.logger = logger
-        
-        # connect to memcached to get authentication 
-        # details that cannot be sent through the lowly
-        # auth token
+
+        # connect to memcached to get auth details that can't be sent w/token
         memcache_string = '%s:%s' % (memcache_host, memcache_port)
         self.mc = memcache.Client([memcache_string], debug=0)
 
 
     def __call__(self, environ, start_response):
         req = Request(environ)
+        auth_token = req.headers['x-auth-token']
+
         try:
-            
-            # TODO: should probably pass this in from
-            # the outside
-            conf_dir = local_settings.CONF_DIR
-
-            # Load default JSON transformer
-            cli = TukeyCli(jsonTrans())
-
-            auth_token = req.headers['x-auth-token']
-
             values = self.mc.get(auth_token)
+            if values == None:
+                 values = {}
+            resp = self.handle_openstack_api(req, auth_token, values)
 
-            #self.logger.debug(values)
-            
-            command = self.__path_to_command(req.path)
+        except memcache.Client.MemcachedKeyNoneError:  
+            pass
+
+        return resp(environ, start_response)
+
+
+    def path(self, path, method, query, name):
+        ''' Format the path the way we need it '''
+        if method == "DELETE" and name in ['keypairs']:
+            path_parts = path.split('/')
+            path_parts[-1] = path_parts[-1].split('-',1)[-1]
+            path = '/'.join(path_parts)
+
+        if len(query) > 0:
+            path = "%s?%s" % (path, query)
+
+        return path
+
+
+    def split_cloud_name(self, oldname):
+        ''' Separate the cloud name from the real name
+        we are curretnly using a scheme of cloudname-thingname'''
+        split_id = oldname.split('-',1)
+        return split_id[0], split_id[-1]
+
+
+    def get_name(self, command, method):
+        ''' Get the name of the command'''
+        name, _ = self.__obj_name(command)
+        if method == "POST" and name not in ['server']:
+            name = name[:-1]
+        return name
+
+
+    def is_single(self, command, method):
+        ''' Whether this command is return a plural '''
+        if method == "POST":
+            return True
+        _, is_single = self.__obj_name(command)
+        return is_single
+
+
+    def handle_openstack_api(self, req, auth_token, values):
+        ''' Handle against the OpenStack API be translating and aggregating
+        the results of lots of messed up nonsense '''
+        try:
             global_values = self.__path_to_params(req.path)
+            global_values[GLOBAL].update(values)
+            global_values[GLOBAL]['auth-token'] = auth_token
+            global_values[GLOBAL]['method'] = req.method
 
-            global_values[TukeyCli.GLOBAL_SECTION].update(values)
-
-            global_values[TukeyCli.GLOBAL_SECTION]['method'] = req.method
-            global_values[TukeyCli.GLOBAL_SECTION]['auth-token'] = auth_token
             if 'x-auth-project-id' in req.headers:
-                global_values[TukeyCli.GLOBAL_SECTION]['auth-project-id'] = req.headers['x-auth-project-id']
-        
+                global_values[GLOBAL]['auth-project-id'] = req.headers[
+                    'x-auth-project-id']
 
-            global_values[TukeyCli.GLOBAL_SECTION].update(req.params)
+            global_values[GLOBAL].update(req.params)
 
-            name, is_single = self.__obj_name(command)
+            command = self.__path_to_command(req.path)
+            self.logger.debug("The command is %s", command)
 
-            path = req.path
-
-            post_exception_names = ['server']
-            multiplexed_names = ['keypairs']
+            name = self.get_name(command, req.method)
 
             if req.method == "POST":
-                is_single = True
-                if not name in post_exception_names:
-                    name = name[:-1]
-                
                 body_values = json.loads(req.body)
                 if name in body_values:
                     body_values = json.loads(req.body)[name]
-                    split_id = body_values['name'].split('-',1)
-                    cloud = split_id[0]
-                    new_object_name = split_id[-1]
-                    body_values['name'] = new_object_name
-    
-                    #self.logger.debug(body_values)
-                    
+                    cloud, body_values['name'] = self.split_cloud_name(
+                        body_values['name'])
                     req.body = json.dumps({name: body_values})
-                    
-                    global_values[TukeyCli.GLOBAL_SECTION].update(body_values)
-                    
-                    cli.load_config_dir(conf_dir + cloud)
-                else:
-                    cli.load_config_dir(conf_dir)
+                    global_values[GLOBAL].update(body_values)
 
-            elif req.method == "DELETE" and name in multiplexed_names:
-                id = global_values[TukeyCli.GLOBAL_SECTION]['id']
-                split_id = id.split('-',1)
-                cloud = split_id[0]
-                new_id = split_id[-1]
-                global_values[TukeyCli.GLOBAL_SECTION]['id'] = new_id
-                cli.load_config_dir(conf_dir + cloud)
-                path_parts = path.split('/')
-                path_parts[-1] = path_parts[-1].split('-',1)[-1]
-                path = '/'.join(path_parts)
-                #logger.debug("earlier path %s", path)
-
-            else:
-                cli.load_config_dir(conf_dir)
+            elif req.method == "DELETE" and name in ['keypairs']:
+                cloud, global_values[GLOBAL]['id'] = self.split_cloud_name(
+                    global_values[GLOBAL]['id'])
 
             values.update(global_values)
 
-            #self.logger.debug(values)
+            if "master_tenantId" in global_values[GLOBAL]:
+                default_tenant = global_values[GLOBAL]["master_tenantId"]
+            else:
+                default_tenant = getattr(global_values[GLOBAL], "project_id",
+                    None)
 
-            if len(req.query_string) > 0:
-                path = "%s?%s" % (path, req.query_string)
+            cli = TukeyCli(jsonTrans())
+            try:
+                cli.load_config_dir(local_settings.CONF_DIR + cloud)
+            except NameError:
+                cli.load_config_dir(local_settings.CONF_DIR)
 
-            self.logger.debug("The command is %s", command)
-            self.logger.debug(global_values)
-
-            return_headers = {"headers": []}            
+            return_headers = {"headers": []}
 
             result = cli.execute_commands(command, values, object_name=name,
-                single=is_single, 
-                proxy_method=self.openstack_proxy(req, path, return_headers))
-
-            logger.debug(result)
+                single=self.is_single(command, req.method),
+                    proxy_method=self.openstack_proxy(req, self.path(req.path,
+                            req.method, req.query_string, name),
+                        return_headers, default_tenant))
 
             result = self.remove_error(name, result)
-            
             result = self.apply_os_exceptions(command, result)
 
             logger.debug(result)
-            
+
             resp = Response(result)
+            resp.conditional_response = True
 
             result_object = json.loads(result)
 
-            failure_codes = [409,413,402]
-
             if 'message' in result_object[name] \
                 and 'code' in result_object[name] \
-                and result_object[name]['code'] in failure_codes:
+                and result_object[name]['code'] in [409,413,402]:
                 resp.status = result_object[name]['code']
-
-            resp.conditional_response = True
 
             resp.headers.add('Content-Type','application/json')
 
@@ -167,13 +173,13 @@ class OpenStackApiProxy(object):
 
         except exc.HTTPException, e:
             resp = e
-        return resp(environ, start_response)
 
+        return resp
 
     def apply_os_exceptions(self, command, result):
         if command == 'os-quota-sets':
             res_obj = json.loads(result)
-            #res_obj['quota_set'] = {quota_set['cloud']: quota_set for 
+            #res_obj['quota_set'] = {quota_set['cloud']: quota_set for
             #                    quota_set in res_obj['quota_set']}
             res_obj['quota_set'] = {quota_set['cloud']:
                 {key: value for key, value in quota_set.items()
@@ -188,7 +194,7 @@ class OpenStackApiProxy(object):
             else:
                 res_obj['tenant_usage'] = {}
                 return json.dumps(res_obj)
-            
+
         return result
 
 
@@ -198,7 +204,7 @@ class OpenStackApiProxy(object):
             new_res = [item for item in res_obj if not ('error'in item)]
             return json.dumps({name: new_res})
         return result
-        
+
 
     def __parse_path(self, full_path):
 
@@ -229,45 +235,53 @@ class OpenStackApiProxy(object):
 
 
     def __path_to_params(self, full_path):
-        
+
         path_segments, index = self.__parse_path(full_path)
 
-        global_values =  {TukeyCli.GLOBAL_SECTION:{}}
+        global_values =  {GLOBAL:{}}
 
         if len(path_segments) > index + 1:
-            global_values = {TukeyCli.GLOBAL_SECTION: {'id': path_segments[index + 1]}}
+            global_values = {GLOBAL: {'id': path_segments[index + 1]}}
 
         return global_values
 
 
     def __obj_name(self, command):
+        ''' There is probably some nice regex that can go here '''
 
-        os_exceptions = ['os-quota-sets']
         command_segments = command.split("/")
 
         if 'os-simple-' in command_segments[0]:
             return command_segments[0][10:].replace('-','_'), True
         if 'os-' in command_segments[0]:
-            if command_segments[0] not in os_exceptions:
+            if command_segments[0] not in ['os-quota-sets']:
                 return command_segments[0][3:].replace('-','_'), False
             else:
                 return command_segments[0][3:-1].replace('-','_'), False
-        
 
         if len(command_segments) > 1  and command_segments[1] in OpenStackApiProxy.after_command:
             return command_segments[0], False
         else:
             return command_segments[0][:-1], True
 
-    
-    def openstack_proxy(self, req, path, return_headers):
-        return lambda host: str(self.proxy_request(host, req, path, return_headers))
 
-    def proxy_request(self, host, req, path, return_headers):
+    def openstack_proxy(self, req, path, return_headers, default_tenant):
+        return lambda host, token_id, tenant_id: str(self.proxy_request(host,
+            token_id, tenant_id, req, path, return_headers, default_tenant))
+
+    def proxy_request(self, host, token_id, tenant_id, req, path,
+            return_headers, default_tenant):
         conn = httplib.HTTPConnection(host, self.port, False)
-        if req.method != "POST" and 'Content-Length' in req.headers:
-            del(req.headers['Content-Length'])
-        conn.request(req.method, path, req.body, req.headers)
+        # EnvironHeaders has no copy method
+        headers = {key: value for key, value in req.headers.items()}
+        if req.method != "POST" and 'Content-Length' in headers:
+            del(headers['Content-Length'])
+        # Capitlizatoin matters in dict
+        headers["X-Auth-Token"] = token_id
+        headers["X-Auth-Project-Id"] = tenant_id
+        if default_tenant is not None:
+            path = path.replace(default_tenant, tenant_id)
+        conn.request(req.method, path, req.body, headers)
         response = conn.getresponse()
         if response.status == 404:
             res_list = '[]'
@@ -300,11 +314,6 @@ if __name__ == '__main__':
         '-d', '--debug', default=False,
         action="store_true", dest='debug')
 
-#    parser.add_option(
-#        '-o', '--openstack_host', default='10.103.114.3',
-#        dest='openstack_host', type='str',
-#        help='OpenStack host (default 10.103.114.3)')
-
     log_file_name = local_settings.LOG_DIR + 'tukey-api.log'
 
     parser.add_option(
@@ -314,8 +323,7 @@ if __name__ == '__main__':
 
     options, args = parser.parse_args()
 
-
-        #logging settings 
+    #logging settings
     logger = logging.getLogger('tukey-api')
 
     if options.debug:
@@ -356,3 +364,4 @@ else:
     logger.setLevel(logging.DEBUG)
 
     application = OpenStackApiProxy(8774, '127.0.0.1', 11211, logger)
+

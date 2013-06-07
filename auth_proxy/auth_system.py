@@ -45,6 +45,7 @@ class AuthSystem(object):
 class FakeId(object):
     '''Mixin for non Keystone authentication methods to return the
     Keystone API for token, tenant and endpoint
+    TODO: api_url is actually a host not an url
     '''
 
     def __init__(self, api_url, member_role_id, token_lifetime,
@@ -52,6 +53,7 @@ class FakeId(object):
         identity_admin_port=35357, identity_port=5000):
 
         self.token_lifetime = token_lifetime
+        # TODO: self.url is actually a host not a url
         self.url = api_url
         self.member_role_id = member_role_id
 
@@ -201,19 +203,19 @@ class FakeId(object):
         '''Returns a JSON serializable object that is equivalent to what
         Keystone will return when requesting an auth token.
         '''
-        pass
+        raise NotImplementedError
 
     def fake_tenant(self):
         '''Returns a JSON serializable object that is equivalent to what
         Keystone will return when requesting tenant info.
         '''
-        pass
+        raise NotImplementedError
 
     def fake_endpoint(self):
         '''Returns a JSON serializable object that is equivalent to what
         Keystone will return when requesting endpoint info.
         '''
-        pass
+        raise NotImplementedError
 
 class OpenStackAuth(AuthSystem, FakeId):
     '''Contacts database with OpenID or Shibboleth to get
@@ -230,6 +232,13 @@ class OpenStackAuth(AuthSystem, FakeId):
 
 
     def authenticate(self, method, identifier, tenant, cloud_name):
+        ''' OpenStack authentication against keystone this should probably be
+        replaced to actually use the keystoneclient. Fetches the username pw
+        from the database, we would like to replace this with ldap.  If can't
+        connect or there is an error return None'''
+
+        logger = logging.getLogger('tukey-auth')
+
         username, password = auth_db.userInfo(method, identifier, cloud_name)
 
         creds = {
@@ -256,10 +265,14 @@ class OpenStackAuth(AuthSystem, FakeId):
             }
 
         conn = httplib.HTTPConnection(self.keystone_host, self.keystone_port)
-        conn.request("POST", "/v2.0/tokens", body, headers)
-        res = conn.getresponse()
+        try:
+            conn.request("POST", "/v2.0/tokens", body, headers)
+            res = conn.getresponse()
+        except:
+             logger.debug("Can't connect to %s %s", self.keystone_host,
+                 self.keystone_port)
+             return None
 
-        logger = logging.getLogger('tukey-auth')
         logger.debug("status from contacting keystone: %s", res.status)
 
         if res.status != 200:
